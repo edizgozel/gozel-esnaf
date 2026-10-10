@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Finansal tablolarda ve tutarlarda rakamların tam dikey hizalanması */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
