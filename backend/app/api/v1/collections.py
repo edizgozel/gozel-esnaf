@@ -2,8 +2,9 @@ from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 from backend.app.core.database import get_db
-from backend.app.models.all_models import Collection, Customer, CustomerTransaction
+from backend.app.models.all_models import Collection, Customer, CustomerTransaction, Sale
 from backend.app.schemas.all_schemas import CollectionCreate, CollectionUpdate, CollectionResponse
 
 router = APIRouter(prefix="/collections", tags=["Tahsilatlar"])
@@ -126,6 +127,38 @@ def create_collection(payload: CollectionCreate, db: Session = Depends(get_db)):
     )
     db.add(transaction)
 
+    if payload.sale_id:
+        target_sale = db.query(Sale).filter(Sale.id == payload.sale_id).first()
+        if target_sale and target_sale.status == "Tamamlandı" and target_sale.remaining_amount_cents > 0:
+            deduct_amt = min(payload.amount_cents, target_sale.remaining_amount_cents)
+            target_sale.remaining_amount_cents -= deduct_amt
+            if target_sale.remaining_amount_cents == 0:
+                target_sale.payment_status = "Ödendi"
+            else:
+                target_sale.payment_status = "Kısmi Ödendi"
+    else:
+        pending_sales = (
+            db.query(Sale)
+            .filter(
+                Sale.customer_id == customer.id,
+                Sale.status == "Tamamlandı",
+                Sale.remaining_amount_cents > 0,
+            )
+            .order_by(Sale.sale_date.asc(), Sale.id.asc())
+            .all()
+        )
+        remaining_to_allocate = payload.amount_cents
+        for s in pending_sales:
+            if remaining_to_allocate <= 0:
+                break
+            deduct = min(remaining_to_allocate, s.remaining_amount_cents)
+            s.remaining_amount_cents -= deduct
+            remaining_to_allocate -= deduct
+            if s.remaining_amount_cents == 0:
+                s.payment_status = "Ödendi"
+            else:
+                s.payment_status = "Kısmi Ödendi"
+
     db.commit()
     db.refresh(collection)
 
@@ -159,6 +192,43 @@ def delete_collection(collection_id: int, db: Session = Depends(get_db)):
             transaction_date=datetime.utcnow(),
         )
         db.add(transaction)
+
+        if collection.sale_id:
+            target_sale = db.query(Sale).filter(Sale.id == collection.sale_id).first()
+            if target_sale and target_sale.status == "Tamamlandı":
+                max_restore = target_sale.total_cents - target_sale.paid_amount_cents
+                target_sale.remaining_amount_cents = min(max_restore, target_sale.remaining_amount_cents + collection.amount_cents)
+                if target_sale.remaining_amount_cents == 0:
+                    target_sale.payment_status = "Ödendi"
+                elif target_sale.remaining_amount_cents < target_sale.total_cents:
+                    target_sale.payment_status = "Kısmi Ödendi"
+                else:
+                    target_sale.payment_status = "Bekliyor"
+        else:
+            recent_sales = (
+                db.query(Sale)
+                .filter(
+                    Sale.customer_id == customer.id,
+                    Sale.status == "Tamamlandı",
+                )
+                .order_by(Sale.sale_date.desc(), Sale.id.desc())
+                .all()
+            )
+            remaining_to_restore = collection.amount_cents
+            for s in recent_sales:
+                if remaining_to_restore <= 0:
+                    break
+                max_can_restore = (s.total_cents - s.paid_amount_cents) - s.remaining_amount_cents
+                if max_can_restore > 0:
+                    restore_amt = min(remaining_to_restore, max_can_restore)
+                    s.remaining_amount_cents += restore_amt
+                    remaining_to_restore -= restore_amt
+                    if s.remaining_amount_cents == 0:
+                        s.payment_status = "Ödendi"
+                    elif s.remaining_amount_cents < s.total_cents:
+                        s.payment_status = "Kısmi Ödendi"
+                    else:
+                        s.payment_status = "Bekliyor"
 
     db.delete(collection)
     db.commit()

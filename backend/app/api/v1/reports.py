@@ -164,29 +164,43 @@ def get_sales_report(
 
     sales = query.order_by(Sale.sale_date.desc(), Sale.id.desc()).all()
     total_cents = sum(s.total_cents for s in sales)
-    paid_cents = sum(s.paid_amount_cents for s in sales)
-    remaining_cents = sum(s.remaining_amount_cents for s in sales)
+    items = []
+    total_paid_cents = 0
+    total_remaining_cents = 0
 
-    items = [
-        {
+    for s in sales:
+        col_sum = (
+            db.query(func.coalesce(func.sum(Collection.amount_cents), 0))
+            .filter(Collection.sale_id == s.id)
+            .scalar()
+        ) or 0
+        eff_paid = max(
+            (s.paid_amount_cents or 0) + col_sum,
+            s.total_cents - (s.remaining_amount_cents or 0)
+        )
+        if eff_paid > s.total_cents:
+            eff_paid = s.total_cents
+        eff_remaining = s.total_cents - eff_paid
+        total_paid_cents += eff_paid
+        total_remaining_cents += eff_remaining
+
+        items.append({
             "id": s.id,
             "sale_number": s.sale_number,
             "date": s.sale_date.strftime("%d.%m.%Y %H:%M"),
             "customer_name": s.customer.name if s.customer else "Perakende Müşteri",
             "total_cents": s.total_cents,
-            "paid_amount_cents": s.paid_amount_cents,
-            "remaining_amount_cents": s.remaining_amount_cents,
+            "paid_amount_cents": eff_paid,
+            "remaining_amount_cents": eff_remaining,
             "payment_method": s.payment_method,
             "items_count": len(s.items),
-        }
-        for s in sales
-    ]
+        })
 
     return {
         "total_count": len(sales),
         "total_cents": total_cents,
-        "paid_cents": paid_cents,
-        "remaining_cents": remaining_cents,
+        "paid_cents": total_paid_cents,
+        "remaining_cents": total_remaining_cents,
         "items": items,
     }
 

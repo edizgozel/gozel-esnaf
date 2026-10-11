@@ -61,6 +61,7 @@ export const SalesPage: React.FC = () => {
   const [saleDate, setSaleDate] = useState<string>(new Date().toISOString().split('T')[0])
   const [paymentMethod, setPaymentMethod] = useState<string>('Nakit')
   const [paidAmountInput, setPaidAmountInput] = useState<string>('')
+  const [isPaidAmountManuallyEdited, setIsPaidAmountManuallyEdited] = useState<boolean>(false)
   const [saleNotes, setSaleNotes] = useState<string>('')
 
   // Sepet
@@ -105,6 +106,7 @@ export const SalesPage: React.FC = () => {
     setSaleDate(new Date().toISOString().split('T')[0])
     setPaymentMethod('Nakit')
     setPaidAmountInput('')
+    setIsPaidAmountManuallyEdited(false)
     setSaleNotes('')
     setSelectedProductId('')
     setSelectedQty(1)
@@ -169,7 +171,27 @@ export const SalesPage: React.FC = () => {
     0
   )
 
-  // Satışı Tamamla ve Gönder
+  useEffect(() => {
+    if (!isPaidAmountManuallyEdited) {
+      if (paymentMethod === 'Açık Hesap') {
+        setPaidAmountInput('0')
+      } else {
+        setPaidAmountInput(cartSubtotalCents > 0 ? (cartSubtotalCents / 100).toFixed(2) : '')
+      }
+    }
+  }, [cartSubtotalCents, paymentMethod, isPaidAmountManuallyEdited])
+
+  const handlePaymentMethodChange = (newMethod: string) => {
+    setPaymentMethod(newMethod)
+    if (newMethod === 'Açık Hesap') {
+      setPaidAmountInput('0')
+      setIsPaidAmountManuallyEdited(true)
+    } else {
+      setPaidAmountInput(cartSubtotalCents > 0 ? (cartSubtotalCents / 100).toFixed(2) : '')
+      setIsPaidAmountManuallyEdited(false)
+    }
+  }
+
   const handleCompleteSale = async () => {
     if (cart.length === 0) {
       setFormError('Lütfen sepete en az bir ürün ekleyiniz.')
@@ -180,8 +202,18 @@ export const SalesPage: React.FC = () => {
     setFormError(null)
 
     try {
-      const paidFloat = parseFloat(paidAmountInput.replace(',', '.')) || 0
-      const paidCents = Math.round(paidFloat * 100)
+      let paidCents: number
+      const trimmed = paidAmountInput.trim()
+      if (trimmed === '') {
+        if (paymentMethod === 'Açık Hesap') {
+          paidCents = 0
+        } else {
+          paidCents = cartSubtotalCents
+        }
+      } else {
+        const paidFloat = parseFloat(trimmed.replace(',', '.')) || 0
+        paidCents = Math.round(paidFloat * 100)
+      }
 
       await createSale({
         customer_id: selectedCustomerId ? parseInt(selectedCustomerId, 10) : null,
@@ -348,13 +380,15 @@ export const SalesPage: React.FC = () => {
                   </span>
                 </Td>
                 <Td align="right" tabular>
-                  <span
-                    className={`font-semibold ${
-                      s.remaining_amount_cents > 0 ? 'text-rose-700' : 'text-slate-500'
-                    }`}
-                  >
-                    {formatMoney(s.remaining_amount_cents)}
-                  </span>
+                  {s.remaining_amount_cents <= 0 ? (
+                    <span className="text-emerald-700 font-semibold">
+                      Ödendi
+                    </span>
+                  ) : (
+                    <span className="font-semibold text-rose-700">
+                      {formatMoney(s.remaining_amount_cents)}
+                    </span>
+                  )}
                 </Td>
                 <Td align="center">
                   <span className="text-xs text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
@@ -578,7 +612,7 @@ export const SalesPage: React.FC = () => {
               <Select
                 label="Ödeme Şekli"
                 value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value)}
+                onChange={(e) => handlePaymentMethodChange(e.target.value)}
                 options={[
                   { value: 'Nakit', label: 'Nakit (Kasa)' },
                   { value: 'Kredi Kartı', label: 'Kredi / Banka Kartı' },
@@ -592,7 +626,10 @@ export const SalesPage: React.FC = () => {
                 step="0.01"
                 placeholder={formatMoney(cartSubtotalCents).replace(' ₺', '')}
                 value={paidAmountInput}
-                onChange={(e) => setPaidAmountInput(e.target.value)}
+                onChange={(e) => {
+                  setPaidAmountInput(e.target.value)
+                  setIsPaidAmountManuallyEdited(true)
+                }}
               />
               <Input
                 label="Satış Açıklaması / Fiş Notu"
@@ -693,15 +730,19 @@ export const SalesPage: React.FC = () => {
             {/* Toplam Özeti */}
             <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 flex justify-between items-center text-xs">
               <div>
-                <span className="text-slate-500">Peşin Tahsilat: </span>
+                <span className="text-slate-500">Tahsilat: </span>
                 <span className="font-bold text-emerald-700">
                   {formatMoney(selectedSale.paid_amount_cents)}
                 </span>
                 <span className="mx-2 text-slate-300">|</span>
                 <span className="text-slate-500">Kalan Borç: </span>
-                <span className="font-bold text-rose-700">
-                  {formatMoney(selectedSale.remaining_amount_cents)}
-                </span>
+                {selectedSale.remaining_amount_cents <= 0 ? (
+                  <span className="font-bold text-emerald-700">Ödendi</span>
+                ) : (
+                  <span className="font-bold text-rose-700">
+                    {formatMoney(selectedSale.remaining_amount_cents)}
+                  </span>
+                )}
               </div>
               <div>
                 <span className="text-slate-600 font-medium">Toplam: </span>

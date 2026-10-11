@@ -3,9 +3,9 @@ from datetime import datetime
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 from backend.app.core.database import get_db
-from backend.app.models.all_models import Sale, SaleItem, Product, Customer, CustomerTransaction
+from backend.app.models.all_models import Sale, SaleItem, Product, Customer, CustomerTransaction, Collection
 from backend.app.schemas.all_schemas import SaleCreate, SaleResponse, SaleItemResponse
 
 router = APIRouter(prefix="/sales", tags=["Satışlar"])
@@ -29,6 +29,28 @@ def generate_sale_number(db: Session) -> str:
     else:
         new_seq = 1
     return f"{prefix}{new_seq:04d}"
+
+
+def get_effective_sale_payment(sale: Sale, db: Session):
+    col_sum = (
+        db.query(func.coalesce(func.sum(Collection.amount_cents), 0))
+        .filter(Collection.sale_id == sale.id)
+        .scalar()
+    ) or 0
+    total_paid = max(
+        (sale.paid_amount_cents or 0) + col_sum,
+        sale.total_cents - (sale.remaining_amount_cents or 0)
+    )
+    if total_paid > sale.total_cents:
+        total_paid = sale.total_cents
+    effective_remaining = sale.total_cents - total_paid
+    if effective_remaining == 0:
+        effective_status = "Ödendi"
+    elif total_paid > 0:
+        effective_status = "Kısmi Ödendi"
+    else:
+        effective_status = "Bekliyor"
+    return total_paid, effective_remaining, effective_status
 
 
 @router.get("/today-summary")
@@ -58,29 +80,33 @@ def get_today_sales_summary(db: Session = Depends(get_db)):
 
     total_count = len(today_sales)
     total_amount_cents = sum(s.total_cents for s in today_sales)
-    paid_amount_cents = sum(s.paid_amount_cents for s in today_sales)
-    remaining_amount_cents = sum(s.remaining_amount_cents for s in today_sales)
 
-    items_summary = [
-        {
+    items_summary = []
+    total_paid_cents = 0
+    total_remaining_cents = 0
+
+    for s in today_sales:
+        eff_paid, eff_remaining, eff_status = get_effective_sale_payment(s, db)
+        total_paid_cents += eff_paid
+        total_remaining_cents += eff_remaining
+        items_summary.append({
             "id": s.id,
             "sale_number": s.sale_number,
             "customer_name": s.customer.name if s.customer else "Perakende Müşteri",
             "total_cents": s.total_cents,
-            "paid_amount_cents": s.paid_amount_cents,
-            "remaining_amount_cents": s.remaining_amount_cents,
+            "paid_amount_cents": eff_paid,
+            "remaining_amount_cents": eff_remaining,
+            "payment_status": eff_status,
             "payment_method": s.payment_method,
             "sale_date": s.sale_date.isoformat(),
-        }
-        for s in today_sales
-    ]
+        })
 
     return {
         "date": start_of_today.strftime("%Y-%m-%d"),
         "total_count": total_count,
         "total_amount_cents": total_amount_cents,
-        "paid_amount_cents": paid_amount_cents,
-        "remaining_amount_cents": remaining_amount_cents,
+        "paid_amount_cents": total_paid_cents,
+        "remaining_amount_cents": total_remaining_cents,
         "sales": items_summary,
     }
 
@@ -95,8 +121,6 @@ def get_sales(
     query = db.query(Sale)
     if customer_id:
         query = query.filter(Sale.customer_id == customer_id)
-    if payment_status:
-        query = query.filter(Sale.payment_status == payment_status)
     if search:
         search_pattern = f"%{search.strip()}%"
         query = query.outerjoin(Customer).filter(
@@ -108,15 +132,18 @@ def get_sales(
     sales = query.order_by(Sale.sale_date.desc(), Sale.id.desc()).all()
     result = []
     for s in sales:
+        eff_paid, eff_remaining, eff_status = get_effective_sale_payment(s, db)
+        if payment_status and eff_status != payment_status:
+            continue
         resp = SaleResponse(
             id=s.id,
             sale_number=s.sale_number,
             customer_id=s.customer_id,
             customer_name=s.customer.name if s.customer else ("Perakende Müşteri" if not s.customer_id else None),
             total_cents=s.total_cents,
-            paid_amount_cents=s.paid_amount_cents,
-            remaining_amount_cents=s.remaining_amount_cents,
-            payment_status=s.payment_status,
+            paid_amount_cents=eff_paid,
+            remaining_amount_cents=eff_remaining,
+            payment_status=eff_status,
             payment_method=s.payment_method,
             status=s.status,
             notes=s.notes,
@@ -134,15 +161,16 @@ def get_sale(sale_id: int, db: Session = Depends(get_db)):
     if not sale:
         raise HTTPException(status_code=404, detail="Satış kaydı bulunamadı")
 
+    eff_paid, eff_remaining, eff_status = get_effective_sale_payment(sale, db)
     return SaleResponse(
         id=sale.id,
         sale_number=sale.sale_number,
         customer_id=sale.customer_id,
         customer_name=sale.customer.name if sale.customer else ("Perakende Müşteri" if not sale.customer_id else None),
         total_cents=sale.total_cents,
-        paid_amount_cents=sale.paid_amount_cents,
-        remaining_amount_cents=sale.remaining_amount_cents,
-        payment_status=sale.payment_status,
+        paid_amount_cents=eff_paid,
+        remaining_amount_cents=eff_remaining,
+        payment_status=eff_status,
         payment_method=sale.payment_method,
         status=sale.status,
         notes=sale.notes,
@@ -230,7 +258,7 @@ def create_sale(payload: SaleCreate, db: Session = Depends(get_db)):
 
     paid_cents = payload.paid_amount_cents if payload.paid_amount_cents is not None else 0
     if paid_cents > total_cents:
-        paid_cents = total_cents  # Fazla peşinat toplamı geçemez
+        paid_cents = total_cents
     remaining_cents = total_cents - paid_cents
 
     if remaining_cents == 0:
@@ -256,7 +284,7 @@ def create_sale(payload: SaleCreate, db: Session = Depends(get_db)):
         created_at=datetime.utcnow(),
     )
     db.add(sale)
-    db.flush()  # sale.id almak için
+    db.flush()
 
     for c_item in calculated_items:
         sale_item = SaleItem(

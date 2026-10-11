@@ -230,6 +230,7 @@ export interface TodaySalesSummary {
     total_cents: number
     paid_amount_cents: number
     remaining_amount_cents: number
+    payment_status?: string
     payment_method: string
     sale_date: string
   }>
@@ -240,8 +241,6 @@ export async function getTodaySalesSummary(): Promise<TodaySalesSummary> {
   if (!res.ok) throw new Error('Bugünkü satış özeti alınamadı')
   return res.json()
 }
-
-// ==================== EXPENSES ====================
 
 export async function getExpenses(category?: string, startDate?: string, endDate?: string): Promise<Expense[]> {
   const params = new URLSearchParams()

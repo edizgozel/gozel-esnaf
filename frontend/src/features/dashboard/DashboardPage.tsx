@@ -403,7 +403,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
                     <span className="font-bold text-slate-900 tabular-nums">
                       {formatMoney(s.total_cents)}
                     </span>
-                    {s.remaining_amount_cents > 0 && (
+                    {s.remaining_amount_cents <= 0 ? (
+                      <p className="text-[11px] text-emerald-700 font-semibold">
+                        Ödendi
+                      </p>
+                    ) : (
                       <p className="text-[11px] text-rose-600 font-medium">
                         Kalan: {formatMoney(s.remaining_amount_cents)}
                       </p>

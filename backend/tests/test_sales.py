@@ -211,7 +211,109 @@ def test_sale_cancellation_and_stock_restoration(client):
 
     # Tekrar iptal etmeye çalışınca çift iade engellenmeli (400)
     cancel_again = client.post(f"/api/v1/sales/{sale['id']}/cancel")
+    cancel_again_detail = cancel_again.json()["detail"]
     assert cancel_again.status_code == 400
-    assert "zaten daha önce iptal edilmiştir" in cancel_again.json()["detail"]
+    assert "daha önce iptal edilmiştir" in cancel_again_detail
     assert client.get(f"/api/v1/products/{p['id']}").json()["current_stock"] == 10
+
+
+def test_today_sales_summary_payment_status(client):
+    p = client.post("/api/v1/products", json={
+        "code": "TODAY-1",
+        "name": "Özet Ürünü",
+        "sale_price_cents": 5000,
+        "current_stock": 20,
+    }).json()
+
+    res_paid = client.post("/api/v1/sales", json={
+        "items": [{"product_id": p["id"], "quantity": 1}],
+        "paid_amount_cents": 5000,
+        "payment_method": "Nakit",
+    })
+    assert res_paid.status_code == 201
+
+    res_unpaid = client.post("/api/v1/sales", json={
+        "items": [{"product_id": p["id"], "quantity": 2}],
+        "paid_amount_cents": 0,
+        "payment_method": "Açık Hesap",
+    })
+    assert res_unpaid.status_code == 201
+
+    res_partial = client.post("/api/v1/sales", json={
+        "items": [{"product_id": p["id"], "quantity": 2}],
+        "paid_amount_cents": 3000,
+        "payment_method": "Nakit",
+    })
+    assert res_partial.status_code == 201
+
+    summary_res = client.get("/api/v1/sales/today-summary")
+    assert summary_res.status_code == 200
+    summary = summary_res.json()
+    assert summary["total_count"] >= 3
+    sales_map = {s["id"]: s for s in summary["sales"]}
+
+    assert sales_map[res_paid.json()["id"]]["payment_status"] == "Ödendi"
+    assert sales_map[res_paid.json()["id"]]["remaining_amount_cents"] == 0
+
+    assert sales_map[res_unpaid.json()["id"]]["payment_status"] == "Bekliyor"
+    assert sales_map[res_unpaid.json()["id"]]["remaining_amount_cents"] == 10000
+
+    assert sales_map[res_partial.json()["id"]]["payment_status"] == "Kısmi Ödendi"
+    assert sales_map[res_partial.json()["id"]]["remaining_amount_cents"] == 7000
+
+
+def test_credit_sale_updated_by_subsequent_collections(client):
+    cust = client.post("/api/v1/customers", json={"name": "Açık Hesap Müşteri", "initial_balance_cents": 0}).json()
+    p = client.post("/api/v1/products", json={"code": "ACIK-1", "name": "Borçlu Ürün", "sale_price_cents": 25000, "current_stock": 10}).json()
+
+    res_sale = client.post("/api/v1/sales", json={
+        "customer_id": cust["id"],
+        "items": [{"product_id": p["id"], "quantity": 1}],
+        "paid_amount_cents": 0,
+        "payment_method": "Açık Hesap",
+    })
+    assert res_sale.status_code == 201
+    sale_data = res_sale.json()
+    sale_id = sale_data["id"]
+    assert sale_data["total_cents"] == 25000
+    assert sale_data["paid_amount_cents"] == 0
+    assert sale_data["remaining_amount_cents"] == 25000
+    assert sale_data["payment_status"] == "Bekliyor"
+
+    res_partial_col = client.post("/api/v1/collections", json={
+        "customer_id": cust["id"],
+        "amount_cents": 10000,
+        "payment_method": "Nakit",
+    })
+    assert res_partial_col.status_code == 201
+
+    sale_after_partial = client.get(f"/api/v1/sales/{sale_id}").json()
+    assert sale_after_partial["paid_amount_cents"] == 10000
+    assert sale_after_partial["remaining_amount_cents"] == 15000
+    assert sale_after_partial["payment_status"] == "Kısmi Ödendi"
+
+    summary_partial = client.get("/api/v1/sales/today-summary").json()
+    today_sale_item = next(s for s in summary_partial["sales"] if s["id"] == sale_id)
+    assert today_sale_item["paid_amount_cents"] == 10000
+    assert today_sale_item["remaining_amount_cents"] == 15000
+    assert today_sale_item["payment_status"] == "Kısmi Ödendi"
+
+    res_full_col = client.post("/api/v1/collections", json={
+        "customer_id": cust["id"],
+        "amount_cents": 15000,
+        "payment_method": "Banka",
+    })
+    assert res_full_col.status_code == 201
+
+    sale_after_full = client.get(f"/api/v1/sales/{sale_id}").json()
+    assert sale_after_full["paid_amount_cents"] == 25000
+    assert sale_after_full["remaining_amount_cents"] == 0
+    assert sale_after_full["payment_status"] == "Ödendi"
+
+    summary_full = client.get("/api/v1/sales/today-summary").json()
+    today_sale_full = next(s for s in summary_full["sales"] if s["id"] == sale_id)
+    assert today_sale_full["paid_amount_cents"] == 25000
+    assert today_sale_full["remaining_amount_cents"] == 0
+    assert today_sale_full["payment_status"] == "Ödendi"
+
 
