@@ -84,6 +84,77 @@ def test_collections_and_customer_balance_lifecycle(client):
     assert tx_after_cancel[0]["balance_after_cents"] == 20000
 
 
+def test_collection_amount_validation_and_customer_statuses(client):
+    # 1. Borçlu müşteri oluştur (10.000 kuruş)
+    cust = client.post("/api/v1/customers", json={
+        "name": "Bakiye Test Müşterisi",
+        "initial_balance_cents": 10000,
+    }).json()
+    cust_id = cust["id"]
+    assert cust["balance_cents"] == 10000
+
+    # Sıfır veya negatif tutarla tahsilat denemesi (422 beklenir)
+    res_zero = client.post("/api/v1/collections", json={
+        "customer_id": cust_id,
+        "amount_cents": 0,
+        "payment_method": "Nakit",
+    })
+    assert res_zero.status_code == 422
+
+    res_negative = client.post("/api/v1/collections", json={
+        "customer_id": cust_id,
+        "amount_cents": -500,
+        "payment_method": "Nakit",
+    })
+    assert res_negative.status_code == 422
+
+    # Kalan borçtan fazla tahsilat denemesi: 15.000 kuruş (borç 10.000 kuruş) -> 400 beklenir
+    res_over = client.post("/api/v1/collections", json={
+        "customer_id": cust_id,
+        "amount_cents": 15000,
+        "payment_method": "Nakit",
+    })
+    assert res_over.status_code == 400
+    assert "kalan borcundan" in res_over.json()["detail"]
+
+    # Müşteri bakiyesi değişmemiş olmalı (atomik koruma)
+    cust_check = client.get(f"/api/v1/customers/{cust_id}").json()
+    assert cust_check["balance_cents"] == 10000
+
+    # Borcun bir kısmı kadar tahsilat (4.000 kuruş)
+    res_partial = client.post("/api/v1/collections", json={
+        "customer_id": cust_id,
+        "amount_cents": 4000,
+        "payment_method": "Nakit",
+    })
+    assert res_partial.status_code == 201
+    cust_partial = client.get(f"/api/v1/customers/{cust_id}").json()
+    assert cust_partial["balance_cents"] == 6000  # Hâlâ borçlu
+
+    # Kalan borcun tamama eşit tahsilat yapılması (6.000 kuruş)
+    res_full = client.post("/api/v1/collections", json={
+        "customer_id": cust_id,
+        "amount_cents": 6000,
+        "payment_method": "Nakit",
+    })
+    assert res_full.status_code == 201
+    cust_full = client.get(f"/api/v1/customers/{cust_id}").json()
+    assert cust_full["balance_cents"] == 0  # Borcu yok
+
+    # Borcu kalmayan müşteriye tekrar tahsilat denemesi -> 400 beklenir
+    res_no_debt = client.post("/api/v1/collections", json={
+        "customer_id": cust_id,
+        "amount_cents": 1000,
+        "payment_method": "Nakit",
+    })
+    assert res_no_debt.status_code == 400
+    assert "Müşterinin borcu bulunmamaktadır" in res_no_debt.json()["detail"]
+
+    # Bakiye kontrolü (0 kuruş olarak kalmalı)
+    cust_final = client.get(f"/api/v1/customers/{cust_id}").json()
+    assert cust_final["balance_cents"] == 0
+
+
 def test_today_sales_summary_and_cancellation_filtering(client):
     # Ürün oluştur
     p = client.post("/api/v1/products", json={

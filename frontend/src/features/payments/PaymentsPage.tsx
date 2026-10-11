@@ -114,17 +114,39 @@ export const PaymentsPage: React.FC = () => {
       return
     }
 
+    const currentCustomer = customers.find((c) => String(c.id) === selectedCustomerId)
+    if (!currentCustomer) {
+      setFormError('Müşteri bulunamadı.')
+      return
+    }
+
+    if (currentCustomer.balance_cents <= 0) {
+      setFormError('Seçilen müşterinin borcu bulunmamaktadır. Tahsilat kaydedilemez.')
+      return
+    }
+
+    const enteredCents = Math.round(amtFloat * 100)
+    if (enteredCents > currentCustomer.balance_cents) {
+      setFormError(
+        `Tahsilat tutarı (${formatMoney(enteredCents)}), müşterinin kalan borcundan (${formatMoney(
+          currentCustomer.balance_cents
+        )}) fazla olamaz.`
+      )
+      return
+    }
+
     setFormSubmitting(true)
     setFormError(null)
 
     try {
       await createCollection({
         customer_id: parseInt(selectedCustomerId, 10),
-        amount_cents: Math.round(amtFloat * 100),
+        amount_cents: enteredCents,
         payment_method: paymentMethod,
         notes: notes.trim() || undefined,
         collection_date: collectionDate ? new Date(collectionDate).toISOString() : undefined,
       })
+
 
       setIsAddModalOpen(false)
       setSuccessMessage('Tahsilat başarıyla kaydedildi ve müşteri cari bakiyesi güncellendi.')

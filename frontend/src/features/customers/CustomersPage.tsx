@@ -222,8 +222,10 @@ export const CustomersPage: React.FC = () => {
   const filteredCustomers = customers.filter((c) => {
     if (filterBalance === 'debtor') return c.balance_cents > 0
     if (filterBalance === 'zero') return c.balance_cents === 0
+    if (filterBalance === 'creditor') return c.balance_cents < 0
     return true
   })
+
 
   const formatMoney = (cents: number) => {
     return (
@@ -294,12 +296,14 @@ export const CustomersPage: React.FC = () => {
             onChange={(e) => setFilterBalance(e.target.value)}
             options={[
               { value: 'all', label: 'Tüm Bakiyeler' },
-              { value: 'debtor', label: 'Sadece Borçlu Olanlar' },
-              { value: 'zero', label: 'Bakiyesi Sıfır Olanlar' },
+              { value: 'debtor', label: 'Borçlu Olanlar' },
+              { value: 'zero', label: 'Borcu Olmayanlar (0 ₺)' },
+              { value: 'creditor', label: 'Alacaklı Olanlar' },
             ]}
           />
         </div>
       </div>
+
 
       {/* Yükleniyor Durumu */}
       {loading ? (
@@ -359,17 +363,32 @@ export const CustomersPage: React.FC = () => {
                 <Td align="right" tabular>
                   <span
                     className={`font-semibold ${
-                      c.balance_cents > 0 ? 'text-rose-700' : 'text-slate-700'
+                      c.balance_cents > 0
+                        ? 'text-rose-700'
+                        : c.balance_cents < 0
+                        ? 'text-emerald-700'
+                        : 'text-slate-700'
                     }`}
                   >
                     {formatMoney(c.balance_cents)}
                   </span>
                 </Td>
                 <Td align="center">
-                  <Badge variant={c.balance_cents > 0 ? 'error' : 'success'} size="sm">
-                    {c.balance_cents > 0 ? 'Borçlu' : 'Dengede'}
-                  </Badge>
+                  {c.balance_cents > 0 ? (
+                    <Badge variant="error" size="sm">
+                      Borçlu
+                    </Badge>
+                  ) : c.balance_cents < 0 ? (
+                    <Badge variant="info" size="sm">
+                      Alacaklı
+                    </Badge>
+                  ) : (
+                    <Badge variant="success" size="sm">
+                      Borcu Yok
+                    </Badge>
+                  )}
                 </Td>
+
                 <Td align="right">
                   <div className="flex items-center justify-end gap-1">
                     <Button
@@ -613,11 +632,25 @@ export const CustomersPage: React.FC = () => {
             </div>
             <div>
               <span className="text-slate-500">Güncel Bakiye: </span>
-              <span className="font-bold text-rose-700 tabular-nums">
+              <span
+                className={`font-bold tabular-nums ${
+                  selectedCustomer && selectedCustomer.balance_cents > 0
+                    ? 'text-rose-700'
+                    : selectedCustomer && selectedCustomer.balance_cents < 0
+                    ? 'text-emerald-700'
+                    : 'text-slate-800'
+                }`}
+              >
                 {selectedCustomer ? formatMoney(selectedCustomer.balance_cents) : '0,00 ₺'}
+                {selectedCustomer && selectedCustomer.balance_cents > 0
+                  ? ' (Borçlu)'
+                  : selectedCustomer && selectedCustomer.balance_cents < 0
+                  ? ' (Alacaklı)'
+                  : ' (Borcu Yok)'}
               </span>
             </div>
           </div>
+
 
           {loadingTransactions ? (
             <div className="py-8 text-center text-slate-400 text-xs">Hareketler yükleniyor...</div>

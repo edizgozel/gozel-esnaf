@@ -69,6 +69,20 @@ def create_collection(payload: CollectionCreate, db: Session = Depends(get_db)):
     if not customer:
         raise HTTPException(status_code=404, detail="Seçilen müşteri bulunamadı.")
 
+    if customer.balance_cents <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Müşterinin borcu bulunmamaktadır. Tahsilat kaydedilemez.",
+        )
+
+    if payload.amount_cents > customer.balance_cents:
+        remaining_tl = f"{customer.balance_cents / 100:.2f}".replace(".", ",")
+        entered_tl = f"{payload.amount_cents / 100:.2f}".replace(".", ",")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tahsilat tutarı ({entered_tl} ₺) müşterinin kalan borcundan ({remaining_tl} ₺) fazla olamaz.",
+        )
+
     col_date = payload.collection_date or datetime.utcnow()
 
     recent_duplicate = (
